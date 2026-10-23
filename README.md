@@ -14,11 +14,11 @@ Cài Python 3.8–3.11 và Git, mở PowerShell rồi chạy:
 git clone https://github.com/UnknownLight2/Esp32-gesture.git
 cd Esp32-gesture
 py -m pip install --upgrade "pip<25.1"
-py -m pip install -r requirements-collect.txt -r requirements-train.txt
+py -m pip install -r requirements-collect.txt -r requirements-train.txt -r requirements-landmark.txt
 py test_ai.py --camera 0
 ```
 
-Đưa bàn tay vào giữa khung hình. Cửa sổ hiển thị nhãn dự đoán và độ tin cậy; nhấn `Q` hoặc `Esc` để thoát. Nếu laptop có nhiều camera, thử `--camera 1`. Có thể kiểm tra một ảnh bằng `py test_ai.py --image "C:\duong\dan\anh.jpg"`.
+Đưa bàn tay vào giữa khung hình. Cửa sổ hiển thị bộ xương 21 khớp, nhãn landmark và kết quả CNN; nhấn `Q` hoặc `Esc` để thoát. Classifier landmark mẫu `model_landmark.keras` có sẵn; MediaPipe tự tải detector khi chạy lần đầu. Nếu laptop có nhiều camera, thử `--camera 1`. Có thể kiểm tra một ảnh bằng `py test_ai.py --image "C:\duong\dan\anh.jpg"`.
 
 ### Thử bằng board ESP32-S3
 
@@ -33,8 +33,8 @@ Firmware dùng `model_outline.h` có sẵn để nhận dạng trực tiếp. Ca
 
 - Xem video camera ESP32-S3 trên trang web nội bộ và đọc trạng thái qua `/status`.
 - Thu ảnh có nhãn từ webcam laptop hoặc stream của ESP32 để bổ sung dữ liệu.
-- Huấn luyện model TFLite, kiểm tra model trên ảnh, webcam hoặc video ESP32.
-- Thử nhận dạng 21 điểm khớp bàn tay trên laptop bằng MediaPipe; chức năng này không chạy trên firmware ESP32 hiện tại.
+- Huấn luyện model TFLite hoặc classifier landmark riêng, kiểm tra trên ảnh, webcam hoặc video ESP32.
+- Vẽ 21 điểm khớp và nhận dạng bằng MediaPipe trên laptop; phần landmark này không chạy trên firmware ESP32 hiện tại.
 
 Nhận dạng cử chỉ hiện chỉ hiển thị nhãn và điểm số, chưa kích hoạt hành động nào. Kết quả phụ thuộc dữ liệu và camera; nên thử bằng ảnh/video mới trước khi sử dụng.
 
@@ -97,11 +97,21 @@ Script xuất file `.h` và `.tflite` theo tên `--out`. Model outline dùng Sob
 
 ## 4. Thử model trên laptop trước khi nạp
 
-`test_ai.py` chạy model TFLite trực tiếp trên webcam laptop, stream MJPEG của ESP32, hoặc ảnh tĩnh. Ảnh xem trước có ô `OUTLINE` là đúng input đã nhấn cạnh; video không bị lật ngang. Cài dependencies thu thập nếu OpenCV/requests còn thiếu:
+`test_ai.py` là file chung để trích landmark từ ảnh mẫu, train classifier riêng của bạn trên các khớp đó, rồi chạy classifier cùng bộ xương tay trên webcam, stream ESP32, hoặc ảnh tĩnh. Nó vẫn có thể chạy CNN ảnh cũ để so sánh. Cài dependencies:
 
 ```powershell
 py -m pip install -r requirements-collect.txt
+py -m pip install -r requirements-landmark.txt
 ```
+
+MediaPipe phát hiện bàn tay và cung cấp 21 khớp; TensorFlow train classifier trên 63 giá trị landmark đã chuẩn hóa. Lệnh train đọc ảnh bạn đã lấy trong `dataset`, bỏ qua ảnh không thấy bàn tay và lưu `model_landmark.keras`:
+
+```powershell
+py -m pip install -r requirements-train.txt
+py test_ai.py --train --data dataset --epochs 40
+```
+
+Đảm bảo mỗi lớp có ảnh bàn tay nhìn rõ. Lớp `none` cần có các tư thế tay khác ngoài bốn cử chỉ mục tiêu; ảnh không có tay tự được trả về `none` lúc chạy. Script tự tải `hand_landmarker.task` lần đầu. Augmentation khi train phản chiếu tọa độ landmark để hỗ trợ cả hai tay; webcam không bị lật.
 
 Webcam laptop:
 
@@ -121,25 +131,9 @@ Trong cửa sổ video, nhấn `I` để mở hộp thoại chọn ảnh tĩnh; 
 py test_ai.py --image "C:\duong\dan\anh.jpg"
 ```
 
-Chương trình hiển thị nhãn dự đoán và điểm số cho từng lớp. Ở live, model chỉ xác nhận khi cùng lớp xuất hiện trong ít nhất 5/7 khung hình liên tiếp và confidence trung bình đạt 50%. Nhấn `I` sẽ đóng cửa sổ live trong lúc chọn/xem ảnh tĩnh; đóng ảnh hoặc hủy hộp thoại thì live tiếp tục. Kiểm tra với ảnh/khung hình chưa dùng khi train. Accuracy validation hiện tại 35.6% còn thấp nên cần bổ sung dữ liệu đa dạng và train lại trước khi tin kết quả.
+Chế độ mặc định `both` vẽ bộ xương 21 khớp và hiện nhãn classifier landmark bạn vừa train, đồng thời hiển thị kết quả CNN ảnh cũ cùng ô `OUTLINE`. Cả hai dự đoán được ổn định theo cửa sổ frame để giảm nhấp nháy. Nhấn `I` để chọn ảnh tĩnh; đóng ảnh thì live tiếp tục. `--mode landmark` chỉ chạy xương tay và classifier học từ dataset của bạn; `--mode cnn` chỉ chạy CNN ảnh cũ.
 
-## 4b. Vẽ bộ xương tay và thử nhận dạng landmark
-
-`test_hand_landmarks.py` dùng MediaPipe để phát hiện bàn tay, vẽ 21 điểm khớp cùng các đoạn xương, rồi chạy bộ phân loại cử chỉ liên tục. Lần chạy đầu tải model `.task` vào `models/`. Đây là model nhận dạng có sẵn, không phải model vừa train từ dataset ảnh của dự án. Nó quy đổi nhãn gần tương ứng: `Closed_Fist` → `FIST`, `Open_Palm` → `PALM`, `Victory` → `PEACE`, `Thumb_Up` → `THUMBS UP`; các tư thế khác thành `NONE`. Có bình chọn trên 7 frame để giảm nhấp nháy. Không lật ảnh; kết quả handedness hiển thị Left/Right.
-
-```powershell
-py -m pip install -r requirements-landmark.txt
-py test_hand_landmarks.py --camera 0
-```
-
-Hoặc ảnh tĩnh / stream MJPEG của ESP32:
-
-```powershell
-py test_hand_landmarks.py --image "C:\duong\dan\anh.jpg"
-py test_hand_landmarks.py --url http://192.168.4.1:81/stream
-```
-
-Nhấn Q hoặc Esc để đóng. Trong chế độ stream ESP32, ESP32 chỉ cung cấp video; laptop vẫn chạy nhận dạng. Script này giúp xác nhận webcam/stream có thấy đủ bàn tay và chạy thử nhãn nhanh hơn CNN ảnh cũ. Muốn đưa xử lý landmark lên chính ESP32-S3 thì cần port firmware sang ESP-IDF/ESP-DL; header TFLite `model_data.h` hiện tại không chứa hand detector hay landmark model. ESP-DL có pipeline riêng gồm HandDetect và HandGestureCls, nhưng các lớp cử chỉ dựng sẵn không giống hoàn toàn danh sách dự án và không chạy bằng cách thay header hiện tại.
+Trong chế độ stream ESP32, board chỉ gửi video; landmark detector và classifier chạy trên laptop. Muốn chuyển cả pipeline lên ESP32-S3 cần port sang ESP-IDF/ESP-DL; model `.keras` này không nạp trực tiếp vào sketch Arduino hiện tại.
 
 ## 5. Kiểm tra nhận dạng trên ESP32
 

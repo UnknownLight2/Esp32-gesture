@@ -4,3 +4,8 @@ __pycache__/
 venv/
 model_data.h
 model_data.tflite
+model_augmented*.h
+model_augmented*.tflite
+dataset_augmented/
+dataset_augmented_*/
+models/*.task

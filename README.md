@@ -1,6 +1,42 @@
 # ESP32-S3 gesture demo
 
-Pipeline tạo 5 nhãn `fist`, `palm`, `peace`, `thumbs_up`, `none`. Lớp `none` là các tư thế bàn tay không thuộc bốn cử chỉ mục tiêu. Chưa gán hành động nào cho cử chỉ.
+Pipeline tạo 5 nhãn `fist`, `palm`, `peace`, `thumbs_up`, `none`. Lớp `none` là các tư thế bàn tay không thuộc bốn cử chỉ mục tiêu. Nếu thư mục ảnh của bạn tên `other`, script train cũng nhận thư mục đó làm dữ liệu cho lớp `none`. Chưa gán hành động nào cho cử chỉ.
+
+## Bắt đầu nhanh cho người mới
+
+Dự án nhận dạng 4 cử chỉ tay (`fist`, `palm`, `peace`, `thumbs_up`) và lớp `none` cho tư thế khác/không có tay. Bạn có thể thử nhận dạng ngay trên laptop bằng webcam mà chưa cần ESP32; model mẫu `model_outline.tflite` đã có sẵn trong repository.
+
+### Thử trên laptop
+
+Cài Python 3.8–3.11 và Git, mở PowerShell rồi chạy:
+
+```powershell
+git clone https://github.com/UnknownLight2/Esp32-gesture.git
+cd Esp32-gesture
+py -m pip install --upgrade "pip<25.1"
+py -m pip install -r requirements-collect.txt -r requirements-train.txt
+py test_ai.py --camera 0
+```
+
+Đưa bàn tay vào giữa khung hình. Cửa sổ hiển thị nhãn dự đoán và độ tin cậy; nhấn `Q` hoặc `Esc` để thoát. Nếu laptop có nhiều camera, thử `--camera 1`. Có thể kiểm tra một ảnh bằng `py test_ai.py --image "C:\duong\dan\anh.jpg"`.
+
+### Thử bằng board ESP32-S3
+
+1. Cài Arduino IDE, ESP32 board support và thư viện `Chirale_TensorFlowLite` trong Library Manager.
+2. Mở `esp32s3_gesture.ino`, chọn **ESP32S3 Dev Module**. Với board N16R8, bật PSRAM theo cấu hình board và chọn partition phù hợp.
+3. Nạp sketch. Kết nối máy tính vào Wi-Fi `ESP32-GESTURE` (mật khẩu `12345678`), rồi mở `http://192.168.4.1` để xem camera và kết quả nhận dạng.
+4. Muốn thử nhận dạng video ESP32 trên laptop, cài dependencies như phần trên, kết nối vào Wi-Fi của board và chạy `py test_ai.py --url http://192.168.4.1:81/stream`.
+
+Firmware dùng `model_outline.h` có sẵn để nhận dạng trực tiếp. Camera ESP32-S3 và phần nhận dạng trên laptop/board cần được kiểm tra với đúng revision phần cứng; xem các mục bên dưới nếu muốn tự thu dữ liệu hoặc huấn luyện lại.
+
+### Chức năng chính
+
+- Xem video camera ESP32-S3 trên trang web nội bộ và đọc trạng thái qua `/status`.
+- Thu ảnh có nhãn từ webcam laptop hoặc stream của ESP32 để bổ sung dữ liệu.
+- Huấn luyện model TFLite, kiểm tra model trên ảnh, webcam hoặc video ESP32.
+- Thử nhận dạng 21 điểm khớp bàn tay trên laptop bằng MediaPipe; chức năng này không chạy trên firmware ESP32 hiện tại.
+
+Nhận dạng cử chỉ hiện chỉ hiển thị nhãn và điểm số, chưa kích hoạt hành động nào. Kết quả phụ thuộc dữ liệu và camera; nên thử bằng ảnh/video mới trước khi sử dụng.
 
 ## 1. Trước hết: camera và IP
 
@@ -11,9 +47,10 @@ Pipeline tạo 5 nhãn `fist`, `palm`, `peace`, `thumbs_up`, `none`. Lớp `none
 
 ## 2. Thu sample
 
-Cài Python 3.8-3.11 và dependency (TensorFlow 2.13.1 có wheel cho CPython 3.8 trên Windows):
+Cài Python 3.8-3.11 và dependency. Nếu pip quá cũ, nâng pip lên bản cuối hỗ trợ Python 3.8 trước:
 
 ```powershell
+py -m pip install --upgrade "pip<25.1"
 py -m pip install -r requirements-collect.txt
 ```
 
@@ -43,19 +80,73 @@ Nhấn SPACE để lưu frame, Q để thoát. Thu tối thiểu vài trăm ản
 
 ## 3. Train và xuất model
 
+Tạo thêm 100 biến thể ảnh cho mỗi lớp và giữ nguyên `dataset` gốc:
+
 ```powershell
-py -m pip install -r requirements-train.txt
-py train_model.py --data dataset --epochs 25 --out model_data.h
+py augment_dataset.py --data dataset --out dataset_augmented --per-class 100
 ```
 
-Script xuất `model_data.h` và `model_data.tflite`. Header có thứ tự nhãn cố định như trên. Đặt `model_data.h` cạnh `.ino`, mở lại/compile sketch trong Arduino IDE rồi upload. Nếu thư viện `Chirale_TensorFlowLite` thiếu, cài thư viện cùng tên trong Library Manager.
+Các biến thể được tạo từ ảnh hiện có, không thay thế ảnh chụp mới. Khi huấn luyện, ảnh gốc và các biến thể liên quan được giữ cùng một nhóm; các ảnh thu liên tiếp trong cửa sổ 5 giây cũng được gom nhóm để giảm rò rỉ khung hình gần giống sang validation.
 
-## 4. Kiểm tra nhận dạng
+```powershell
+py -m pip install -r requirements-train.txt
+py train_model.py --data dataset_augmented --epochs 25 --out model_outline.h
+```
+
+Script xuất file `.h` và `.tflite` theo tên `--out`. Model outline dùng Sobel nhẹ để nhấn nét cạnh; firmware ưu tiên `model_outline.h` và áp dụng cùng phép biến đổi. Nếu dùng model cũ `model_data.h`, firmware giữ tiền xử lý grayscale cũ. Đặt đúng header cạnh `.ino`, mở lại/compile sketch trong Arduino IDE rồi upload. Nếu thư viện `Chirale_TensorFlowLite` thiếu, cài thư viện cùng tên trong Library Manager.
+
+## 4. Thử model trên laptop trước khi nạp
+
+`test_ai.py` chạy model TFLite trực tiếp trên webcam laptop, stream MJPEG của ESP32, hoặc ảnh tĩnh. Ảnh xem trước có ô `OUTLINE` là đúng input đã nhấn cạnh; video không bị lật ngang. Cài dependencies thu thập nếu OpenCV/requests còn thiếu:
+
+```powershell
+py -m pip install -r requirements-collect.txt
+```
+
+Webcam laptop:
+
+```powershell
+py test_ai.py --camera 0
+```
+
+Camera ESP32: nạp firmware camera trước, nối laptop vào Wi-Fi `ESP32-GESTURE`, rồi chạy:
+
+```powershell
+py test_ai.py --url http://192.168.4.1:81/stream
+```
+
+Trong cửa sổ video, nhấn `I` để mở hộp thoại chọn ảnh tĩnh; nhấn `Q` hoặc `ESC` để thoát. Hoặc chạy thẳng một ảnh:
+
+```powershell
+py test_ai.py --image "C:\duong\dan\anh.jpg"
+```
+
+Chương trình hiển thị nhãn dự đoán và điểm số cho từng lớp. Ở live, model chỉ xác nhận khi cùng lớp xuất hiện trong ít nhất 5/7 khung hình liên tiếp và confidence trung bình đạt 50%. Nhấn `I` sẽ đóng cửa sổ live trong lúc chọn/xem ảnh tĩnh; đóng ảnh hoặc hủy hộp thoại thì live tiếp tục. Kiểm tra với ảnh/khung hình chưa dùng khi train. Accuracy validation hiện tại 35.6% còn thấp nên cần bổ sung dữ liệu đa dạng và train lại trước khi tin kết quả.
+
+## 4b. Vẽ bộ xương tay và thử nhận dạng landmark
+
+`test_hand_landmarks.py` dùng MediaPipe để phát hiện bàn tay, vẽ 21 điểm khớp cùng các đoạn xương, rồi chạy bộ phân loại cử chỉ liên tục. Lần chạy đầu tải model `.task` vào `models/`. Đây là model nhận dạng có sẵn, không phải model vừa train từ dataset ảnh của dự án. Nó quy đổi nhãn gần tương ứng: `Closed_Fist` → `FIST`, `Open_Palm` → `PALM`, `Victory` → `PEACE`, `Thumb_Up` → `THUMBS UP`; các tư thế khác thành `NONE`. Có bình chọn trên 7 frame để giảm nhấp nháy. Không lật ảnh; kết quả handedness hiển thị Left/Right.
+
+```powershell
+py -m pip install -r requirements-landmark.txt
+py test_hand_landmarks.py --camera 0
+```
+
+Hoặc ảnh tĩnh / stream MJPEG của ESP32:
+
+```powershell
+py test_hand_landmarks.py --image "C:\duong\dan\anh.jpg"
+py test_hand_landmarks.py --url http://192.168.4.1:81/stream
+```
+
+Nhấn Q hoặc Esc để đóng. Trong chế độ stream ESP32, ESP32 chỉ cung cấp video; laptop vẫn chạy nhận dạng. Script này giúp xác nhận webcam/stream có thấy đủ bàn tay và chạy thử nhãn nhanh hơn CNN ảnh cũ. Muốn đưa xử lý landmark lên chính ESP32-S3 thì cần port firmware sang ESP-IDF/ESP-DL; header TFLite `model_data.h` hiện tại không chứa hand detector hay landmark model. ESP-DL có pipeline riêng gồm HandDetect và HandGestureCls, nhưng các lớp cử chỉ dựng sẵn không giống hoàn toàn danh sách dự án và không chạy bằng cách thay header hiện tại.
+
+## 5. Kiểm tra nhận dạng trên ESP32
 
 Mở trang IP in ở Serial Monitor. Khi có model, trang hiển thị lớp và score từng lớp; `/status` trả JSON. Ngưỡng mặc định trong sketch là `0.70`; kết quả dưới ngưỡng hiện `unknown`. Kiểm tra bằng tư thế chưa có trong dataset và nhiều điều kiện thực tế trước khi dùng.
 
 ## Giới hạn xác minh
 
-- Môi trường hiện có Python 3.8, NumPy/Pillow/OpenCV/requests nhưng chưa có TensorFlow và chưa có `arduino-cli`; vì vậy chưa thể xác nhận build Arduino hoặc chạy thật pipeline train ở máy này. `requirements-train.txt` ghim TensorFlow 2.13.1 để tương thích CPython 3.8.
+- Môi trường hiện có Python 3.8, NumPy/Pillow/OpenCV/requests nhưng chưa có TensorFlow và chưa có `arduino-cli`; vì vậy chưa thể xác nhận build Arduino hoặc chạy thật pipeline train ở máy này. `requirements-train.txt` ghim TensorFlow 2.13.0 để tránh lỗi thiếu `tensorflow-intel==2.13.1` trên một số package index Windows.
 - Thu bằng webcam laptop không cần ESP32; thu qua URL MJPEG thì cần nạp firmware stream trước.
 - Pin camera đang theo IoTLabs Bài 10, nhưng ví dụ Bài 13 khác mapping. Cần sơ đồ DVP của đúng revision/lô board trước khi kết luận pin nào chính xác.

@@ -5,7 +5,7 @@
   - Mở http://192.168.4.1 để xem cam; in địa chỉ lên Serial Monitor (115200)
   - Trang web: video + kết quả nhận dạng + xác suất từng lớp
   - /status trả JSON;  stream MJPEG ở cổng 81 (/stream) -> dùng được với collect_data.py
-  - Nếu CHƯA có model_data.h -> chạy chế độ chỉ stream cam (để tìm IP + thu dataset)
+  - Nếu CHƯA có model_outline.h/model_data.h -> chỉ stream camera để tìm IP và thu dataset
 
   Arduino IDE:
     Board: ESP32S3 Dev Module  (package "esp32" by Espressif)
@@ -19,9 +19,19 @@
 #include "img_converters.h"
 #include "esp_http_server.h"
 #include "esp_heap_caps.h"
+#include <stdlib.h>
 
-#if __has_include("model_data.h")
+#if __has_include("model_outline.h")
   #define HAS_MODEL 1
+  #define MODEL_USE_OUTLINE 1
+  #include <Chirale_TensorFlowLite.h>
+  #include "tensorflow/lite/micro/micro_interpreter.h"
+  #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
+  #include "tensorflow/lite/schema/schema_generated.h"
+  #include "model_outline.h"
+#elif __has_include("model_data.h")
+  #define HAS_MODEL 1
+  #define MODEL_USE_OUTLINE 0
   #include <Chirale_TensorFlowLite.h>
   #include "tensorflow/lite/micro/micro_interpreter.h"
   #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
@@ -29,6 +39,7 @@
   #include "model_data.h"
 #else
   #define HAS_MODEL 0
+#define MODEL_USE_OUTLINE 0
 #endif
 
 // ================= CẤU HÌNH =================
@@ -78,7 +89,7 @@ static uint32_t gInferMs = 0;
 
 // ---------- TFLite Micro ----------
 #if HAS_MODEL
-constexpr int kArenaSize = 400 * 1024;      // đặt trong PSRAM
+constexpr int kArenaSize = 1024 * 1024;     // model outline lớn hơn; cấp phát trong PSRAM
 static uint8_t* gArena = nullptr;
 static const tflite::Model* gModel = nullptr;
 static tflite::MicroInterpreter* gInterp = nullptr;
@@ -121,7 +132,8 @@ bool initModel() {
   return true;
 }
 
-// Cắt vuông giữa ảnh xám -> trung bình vùng (giống INTER_AREA) -> 96x96 int8
+// Cắt vuông, thu nhỏ grayscale về 96x96, nhấn outline bằng Sobel rồi lượng tử hóa.
+// Không lật ảnh ở đây; model được train với cả ảnh gốc và ảnh lật ngang.
 static void preprocess(const camera_fb_t* fb, int8_t* dst) {
   const int w = fb->width, h = fb->height;
   const int side = (w < h) ? w : h;
@@ -129,6 +141,7 @@ static void preprocess(const camera_fb_t* fb, int8_t* dst) {
   const float step = (float)side / IMG;
   const float inv = 1.0f / (255.0f * gIn->params.scale);
   const int zp = gIn->params.zero_point;
+  static uint8_t smallGray[IMG * IMG];
   // GRAYSCALE: 1 byte/pixel. YUV422 (YUYV): 2 byte/pixel, kênh Y nằm ở byte chẵn.
   const int bpp = (int)(fb->len / ((size_t)w * h)) >= 2 ? 2 : 1;
 
@@ -147,8 +160,32 @@ static void preprocess(const camera_fb_t* fb, int8_t* dst) {
         const uint8_t* row = fb->buf + ((size_t)(y0 + yy) * w + x0) * bpp;
         for (int xx = xs; xx < xe; xx++) sum += row[xx * bpp];
       }
-      float v = ((float)sum / ((ye - ys) * (xe - xs))) * inv + zp;
-      int q = lroundf(v);
+      smallGray[y * IMG + x] = (uint8_t)(sum / ((ye - ys) * (xe - xs)));
+    }
+  }
+
+  for (int y = 0; y < IMG; y++) {
+    for (int x = 0; x < IMG; x++) {
+      int outline = smallGray[y * IMG + x];
+#if MODEL_USE_OUTLINE
+      outline = (outline * 90) / 255;
+      if (x > 0 && x < IMG - 1 && y > 0 && y < IMG - 1) {
+        const int a = smallGray[(y - 1) * IMG + x - 1];
+        const int b = smallGray[(y - 1) * IMG + x];
+        const int c = smallGray[(y - 1) * IMG + x + 1];
+        const int d = smallGray[y * IMG + x - 1];
+        const int f = smallGray[y * IMG + x + 1];
+        const int g = smallGray[(y + 1) * IMG + x - 1];
+        const int h = smallGray[(y + 1) * IMG + x];
+        const int i = smallGray[(y + 1) * IMG + x + 1];
+        const int gx = -a + c - 2 * d + 2 * f - g + i;
+        const int gy = -a - 2 * b - c + g + 2 * h + i;
+        int edge = (abs(gx) + abs(gy) + 4) / 8;
+        if (edge > 255) edge = 255;
+        if (edge > outline) outline = edge;
+      }
+#endif
+      int q = lroundf(((float)outline) * inv + zp);
       if (q < -128) q = -128;
       if (q > 127) q = 127;
       dst[y * IMG + x] = (int8_t)q;
@@ -421,7 +458,7 @@ void setup() {
 #if HAS_MODEL
   if (!initModel()) { Serial.println("Dừng: model lỗi"); while (true) delay(1000); }
 #else
-  Serial.println("Chưa có model_data.h -> chế độ chỉ stream cam");
+  Serial.println("Chưa có model_outline.h/model_data.h -> chế độ chỉ stream cam");
 #endif
 
   startWiFi();

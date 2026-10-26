@@ -104,12 +104,14 @@ py -m pip install -r requirements-collect.txt
 py -m pip install -r requirements-landmark.txt
 ```
 
-MediaPipe phát hiện bàn tay và cung cấp 21 khớp; TensorFlow train classifier trên 63 giá trị landmark đã chuẩn hóa. Lệnh train đọc ảnh bạn đã lấy trong `dataset`, bỏ qua ảnh không thấy bàn tay và lưu `model_landmark.keras`:
+MediaPipe phát hiện bàn tay và cung cấp 21 khớp; TensorFlow train classifier trên 63 giá trị landmark đã chuẩn hóa. ZIP dùng ảnh `train/` để train, `val/` để theo dõi và `test/` để đánh giá cuối. Đặt `tinyml_improved_20261016.zip` ở thư mục gốc dự án (cùng cấp README). ZIP cần có cấu trúc `dataset/poses/{train,val,test}/{fist,none,open,peace,thumb_up}/`. Có thể thêm mẫu đã gắn nhãn từ `test_images` vào train, nhưng khi đó thư mục này không còn là tập test độc lập. Lệnh tái lập lượt fine-tune mới nhất:
 
 ```powershell
 py -m pip install -r requirements-train.txt
-py test_ai.py --train --data dataset --epochs 40
+py test_ai.py --train --data dataset --extra-zip tinyml_improved_20261016.zip --extra-data test_images --continue-model model_landmark_v3.keras --landmark-classifier model_landmark.keras --epochs 20 --hard-weight 10
 ```
+
+ZIP ánh xạ `open` thành `palm` và `thumb_up` thành `thumbs_up`. Các file `.keras`, `.tflite` có sẵn trong ZIP là model ảnh RGB, còn model ở đây nhận tọa độ khớp tay; vì đầu vào khác nhau nên lệnh trên dùng ảnh trong ZIP để trích landmark và fine-tune classifier landmark, không nạp trọng số pixel model vào classifier này. `--hard-weight` tăng ảnh hưởng của mẫu khó từ `--extra-data` trong train.
 
 Đảm bảo mỗi lớp có ảnh bàn tay nhìn rõ. Lớp `none` cần có các tư thế tay khác ngoài bốn cử chỉ mục tiêu; ảnh không có tay tự được trả về `none` lúc chạy. Script tự tải `hand_landmarker.task` lần đầu. Augmentation khi train phản chiếu tọa độ landmark để hỗ trợ cả hai tay; webcam không bị lật.
 
@@ -134,6 +136,8 @@ py test_ai.py --image "C:\duong\dan\anh.jpg"
 Chế độ mặc định `both` vẽ bộ xương 21 khớp và hiện nhãn classifier landmark bạn vừa train, đồng thời hiển thị kết quả CNN ảnh cũ cùng ô `OUTLINE`. Cả hai dự đoán được ổn định theo cửa sổ frame để giảm nhấp nháy. Nhấn `I` để chọn ảnh tĩnh; đóng ảnh thì live tiếp tục. `--mode landmark` chỉ chạy xương tay và classifier học từ dataset của bạn; `--mode cnn` chỉ chạy CNN ảnh cũ.
 
 Trong chế độ stream ESP32, board chỉ gửi video; landmark detector và classifier chạy trên laptop. Muốn chuyển cả pipeline lên ESP32-S3 cần port sang ESP-IDF/ESP-DL; model `.keras` này không nạp trực tiếp vào sketch Arduino hiện tại.
+
+ZIP có thông báo nguồn và giấy phép tại `dataset/PUBLIC_DATA_LICENSE.txt`; cần giữ phần ghi công HaGRID và CC BY-SA 4.0 nếu chia sẻ ảnh dẫn xuất hoặc model được tạo từ các ảnh đó. Ảnh cá nhân trong dataset riêng có giấy phép riêng.
 
 ## 5. Kiểm tra nhận dạng trên ESP32
 

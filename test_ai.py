@@ -8,6 +8,7 @@ import random
 import sys
 import time
 import urllib.request
+import zipfile
 
 import cv2
 import numpy as np
@@ -118,8 +119,10 @@ class HandLandmarkDetector:
                 base_options=mp.tasks.BaseOptions(model_asset_path=str(model_path.resolve())),
                 running_mode=vision.RunningMode.IMAGE if is_image else vision.RunningMode.VIDEO,
                 num_hands=2,
-                min_hand_detection_confidence=0.5,
-                min_hand_presence_confidence=0.5,
+                # Lowered from 0.50 after a validation sweep: 0.35 kept validation
+                # accuracy unchanged while allowing weaker hands to be detected.
+                min_hand_detection_confidence=0.35,
+                min_hand_presence_confidence=0.35,
                 min_tracking_confidence=0.5,
             )
         )
@@ -195,14 +198,32 @@ def predicted_hands(classifier, result, threshold=0.55):
     return hands
 
 
-def train_landmark_model(data_dir, model_path, landmark_model_path, epochs=40):
+def train_landmark_model(data_dir, model_path, landmark_model_path, epochs=40,
+                         extra_zip=None, extra_data=None, initial_model=None, hard_weight=10.0):
     if tf is None:
         raise RuntimeError("Thiếu TensorFlow. Cài bằng: py -m pip install -r requirements-train.txt")
     detector = HandLandmarkDetector(landmark_model_path, is_image=True)
     data_dir = Path(data_dir)
-    samples, targets, groups = [], [], []
-    per_class = {}
+    local_samples = {i: [] for i in range(len(LABELS))}
+    local_groups = {i: [] for i in range(len(LABELS))}
+    hard_samples = {i: [] for i in range(len(LABELS))}
+    hard_counts = {label: 0 for label in LABELS}
+    archive_samples = {split: {i: [] for i in range(len(LABELS))}
+                       for split in ("train", "val", "test")}
+    archive_total_counts = {split: {i: 0 for i in range(len(LABELS))}
+                            for split in ("train", "val", "test")}
+
+    def extract(frame):
+        if frame is None:
+            return None
+        result = detector.predict(frame)
+        if not result.hand_landmarks:
+            return None
+        return landmark_features(result.hand_landmarks[0])
+
     try:
+        # User-collected dataset at dataset/<class> is grouped by capture time
+        # before validation splitting, so adjacent frames do not leak across splits.
         for class_index, label in enumerate(LABELS):
             folders = [data_dir / label]
             if label == "none":
@@ -210,66 +231,138 @@ def train_landmark_model(data_dir, model_path, landmark_model_path, epochs=40):
             files = sorted({p for folder in folders if folder.exists()
                             for pattern in ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp")
                             for p in folder.glob(pattern)})
-            accepted = 0
+            print("Extract landmarks from local {}: {} images".format(label, len(files)), flush=True)
             for path in files:
-                frame = cv2.imread(str(path))
-                if frame is None:
-                    continue
-                result = detector.predict(frame)
-                if not result.hand_landmarks:
-                    continue
-                features = landmark_features(result.hand_landmarks[0])
-                if features is None:
-                    continue
-                samples.append(features)
-                targets.append(class_index)
-                groups.append(image_group_id(path))
-                accepted += 1
-            per_class[label] = accepted
+                features = extract(cv2.imread(str(path)))
+                if features is not None:
+                    local_samples[class_index].append(features)
+                    local_groups[class_index].append(image_group_id(path))
+
+        if extra_data:
+            extra_data = Path(extra_data)
+            for class_index, label in enumerate(LABELS):
+                folders = [extra_data / label]
+                if label == "none":
+                    folders.append(extra_data / "other")
+                files = sorted({p for folder in folders if folder.exists()
+                                for pattern in ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp")
+                                for p in folder.glob(pattern)})
+                for path in files:
+                    features = extract(cv2.imread(str(path)))
+                    if features is not None:
+                        # Explicit hard examples always enter training, never validation.
+                        hard_samples[class_index].append(features)
+                        hard_counts[label] += 1
+
+        # ZIP images stay in the archive; only its train split trains the model.
+        # Official val is used for epoch selection; official test is held out.
+        if extra_zip:
+            label_map = {"fist": "fist", "none": "none", "open": "palm",
+                         "peace": "peace", "thumb_up": "thumbs_up"}
+            with zipfile.ZipFile(extra_zip, "r") as archive:
+                zip_image_count = 0
+                for member in archive.namelist():
+                    path = Path(member.replace("\\", "/"))
+                    parts = path.parts
+                    if (len(parts) != 5 or parts[:2] != ("dataset", "poses") or
+                            parts[2] not in archive_samples or parts[3] not in label_map or
+                            path.suffix.lower() not in (".jpg", ".jpeg", ".png", ".bmp", ".webp")):
+                        continue
+                    info = archive.getinfo(member)
+                    if info.file_size > 20_000_000:
+                        continue
+                    index = LABELS.index(label_map[parts[3]])
+                    archive_total_counts[parts[2]][index] += 1
+                    encoded = np.frombuffer(archive.read(member), dtype=np.uint8)
+                    frame = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+                    features = extract(frame)
+                    if features is not None:
+                        archive_samples[parts[2]][index].append(features)
+                    zip_image_count += 1
+                    if zip_image_count % 200 == 0:
+                        print("Extracted ZIP images: {}".format(zip_image_count), flush=True)
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise RuntimeError("Không đọc được dataset/ZIP: {}".format(exc)) from exc
     finally:
         detector.close()
 
-    print("Landmark samples extracted:", per_class)
-    if any(per_class[label] < 2 for label in LABELS):
-        raise RuntimeError("Mỗi lớp cần ít nhất 2 ảnh có bàn tay nhìn rõ; ảnh không có tay bị bỏ qua.")
-
     rng = random.Random(42)
-    train_indices, val_indices = [], []
-    targets_array = np.asarray(targets, dtype=np.int32)
-    for class_index in range(len(LABELS)):
-        class_groups = sorted({groups[i] for i, target in enumerate(targets) if target == class_index})
-        if len(class_groups) < 2:
-            raise RuntimeError("Lớp {} cần ảnh chụp ở ít nhất 2 nhóm thời điểm khác nhau để đánh giá.".format(
-                LABELS[class_index]))
-        rng.shuffle(class_groups)
-        val_count = max(1, int(round(len(class_groups) * 0.2)))
-        validation_groups = set(class_groups[:val_count])
-        for index, target in enumerate(targets):
-            if target != class_index:
-                continue
-            if groups[index] in validation_groups:
-                val_indices.append(index)
-            else:
-                train_indices.append(index)
+    x_train, y_train, x_val, y_val, sample_weights = [], [], [], [], []
+    local_counts = {}
+    for class_index, label in enumerate(LABELS):
+        groups = sorted(set(local_groups[class_index]))
+        indices_by_group = {group: [] for group in groups}
+        for i, group in enumerate(local_groups[class_index]):
+            indices_by_group[group].append(i)
+        if groups and len(groups) < 2 and not extra_zip:
+            raise RuntimeError("Lớp {} trong dataset cục bộ cần ít nhất 2 nhóm ảnh chụp.".format(label))
+        if groups:
+            rng.shuffle(groups)
+            val_groups = (set(groups[:max(1, int(round(len(groups) * 0.2)))])
+                          if len(groups) >= 2 else set())
+            for group, indices in indices_by_group.items():
+                destination_x, destination_y = (x_val, y_val) if group in val_groups else (x_train, y_train)
+                for i in indices:
+                    destination_x.append(local_samples[class_index][i])
+                    destination_y.append(class_index)
+                    if destination_x is x_train:
+                        sample_weights.append(1.0)
+        local_counts[label] = len(local_samples[class_index])
+        x_train.extend(hard_samples[class_index])
+        y_train.extend([class_index] * len(hard_samples[class_index]))
+        sample_weights.extend([float(hard_weight)] * len(hard_samples[class_index]))
+        for split, destination_x, destination_y in (("train", x_train, y_train), ("val", x_val, y_val)):
+            destination_x.extend(archive_samples[split][class_index])
+            destination_y.extend([class_index] * len(archive_samples[split][class_index]))
+            if split == "train":
+                sample_weights.extend([1.0] * len(archive_samples[split][class_index]))
 
-    features = np.asarray(samples, dtype=np.float32)
-    x_train = features[train_indices]
-    y_train = targets_array[train_indices]
-    x_val = features[val_indices]
-    y_val = targets_array[val_indices]
+    train_counts = {label: int(y_train.count(i)) for i, label in enumerate(LABELS)}
+    val_counts = {label: int(y_val.count(i)) for i, label in enumerate(LABELS)}
+    test_counts = {label: len(archive_samples["test"][i]) for i, label in enumerate(LABELS)}
+    print("Local landmark samples:", local_counts)
+    if extra_data:
+        print("Extra labeled hard samples added to train only:", hard_counts)
+    print("Training samples (local + ZIP train):", train_counts)
+    print("Validation samples (local holdout + ZIP val):", val_counts)
+    if extra_zip:
+        print("Held-out ZIP test samples:", test_counts)
+    if any(train_counts[label] < 2 or val_counts[label] < 1 for label in LABELS):
+        raise RuntimeError("Thiếu landmark train/validation ở một lớp. Kiểm tra ảnh và thư mục lớp.")
+
+    x_train = np.asarray(x_train, dtype=np.float32)
+    y_train = np.asarray(y_train, dtype=np.int32)
+    sample_weights = np.asarray(sample_weights, dtype=np.float32)
+    x_val = np.asarray(x_val, dtype=np.float32)
+    y_val = np.asarray(y_val, dtype=np.int32)
     x_train = np.concatenate([x_train, np.asarray([mirror_features(x) for x in x_train])], axis=0)
     y_train = np.concatenate([y_train, y_train], axis=0)
+    sample_weights = np.concatenate([sample_weights, sample_weights], axis=0)
 
-    inputs = tf.keras.Input(shape=(63,), name="hand_landmarks")
-    x = tf.keras.layers.Dense(128, activation="relu")(inputs)
-    x = tf.keras.layers.Dropout(0.25)(x)
-    x = tf.keras.layers.Dense(64, activation="relu")(x)
-    x = tf.keras.layers.Dropout(0.15)(x)
-    outputs = tf.keras.layers.Dense(len(LABELS), activation="softmax")(x)
-    classifier = tf.keras.Model(inputs, outputs)
-    classifier.compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+    if initial_model:
+        classifier = tf.keras.models.load_model(initial_model)
+        optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
+        print("Continuing training from:", initial_model)
+    else:
+        inputs = tf.keras.Input(shape=(63,), name="hand_landmarks")
+        x = tf.keras.layers.Dense(128, activation="relu")(inputs)
+        x = tf.keras.layers.Dropout(0.25)(x)
+        x = tf.keras.layers.Dense(64, activation="relu")(x)
+        x = tf.keras.layers.Dropout(0.15)(x)
+        outputs = tf.keras.layers.Dense(len(LABELS), activation="softmax")(x)
+        classifier = tf.keras.Model(inputs, outputs)
+        optimizer = "adam"
+    classifier.compile(optimizer=optimizer, loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+    counts = np.bincount(y_train, minlength=len(LABELS))
+    class_weights = {i: float(len(y_train) / (len(LABELS) * max(1, counts[i])))
+                     for i in range(len(LABELS))}
+    # Combine class balancing and hard-example emphasis into one vector. TF 2.13
+    # can fail when class_weight and sample_weight are passed together.
+    effective_weights = sample_weights * np.asarray(
+        [class_weights[int(label)] for label in y_train], dtype=np.float32)
     classifier.fit(x_train, y_train, validation_data=(x_val, y_val), epochs=epochs,
                    batch_size=min(32, max(4, len(x_train) // 8)), verbose=2,
+                   sample_weight=effective_weights,
                    callbacks=[tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=7,
                                                                   restore_best_weights=True)])
     loss, accuracy = classifier.evaluate(x_val, y_val, verbose=0)
@@ -277,8 +370,34 @@ def train_landmark_model(data_dir, model_path, landmark_model_path, epochs=40):
     model_path.parent.mkdir(parents=True, exist_ok=True)
     classifier.save(model_path)
     print("Saved landmark classifier:", model_path)
-    print("Validation accuracy={:.1%}, loss={:.4f} (ảnh test độc lập cần thiết để đánh giá thật)".format(
-        accuracy, loss))
+    print("Validation accuracy={:.1%}, loss={:.4f}".format(accuracy, loss))
+
+    test_x, test_y = [], []
+    for class_index in range(len(LABELS)):
+        test_x.extend(archive_samples["test"][class_index])
+        test_y.extend([class_index] * len(archive_samples["test"][class_index]))
+    if test_x:
+        probabilities = classifier.predict(np.asarray(test_x, dtype=np.float32), verbose=0)
+        predicted = np.argmax(probabilities, axis=1)
+        truth = np.asarray(test_y, dtype=np.int32)
+        detected_correct = int(np.sum(predicted == truth))
+        test_total = sum(archive_total_counts["test"].values())
+        no_hand_none = archive_total_counts["test"][LABELS.index("none")] - test_counts["none"]
+        end_to_end_correct = detected_correct + no_hand_none
+        print("ZIP held-out detected-hand classifier accuracy={:.1%} ({}/{} hands)".format(
+            float(np.mean(predicted == truth)), detected_correct, len(truth)))
+        print("ZIP end-to-end accuracy={:.1%} ({}/{} images); detector found {}/{} hands. "
+              "No-hand images count as NONE; missed target hands count as errors.".format(
+                  end_to_end_correct / max(1, test_total), end_to_end_correct, test_total,
+                  len(truth), test_total))
+        for i, label in enumerate(LABELS):
+            mask = truth == i
+            correct = int(np.sum(predicted[mask] == i))
+            total = archive_total_counts["test"][i]
+            if label == "none":
+                correct += total - test_counts[label]
+            if total:
+                print("  {} end-to-end recall: {:.1%} ({}/{})".format(label, correct / total, correct, total))
 
 
 class LandmarkAI:
@@ -394,6 +513,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train", action="store_true", help="Trích 21 landmark từ ảnh dataset và train classifier riêng")
     parser.add_argument("--data", default="dataset", help="Dataset có thư mục fist/palm/peace/thumbs_up/none")
+    parser.add_argument("--extra-zip", help="ZIP tinyml_improved: train dùng train/, validation dùng val/, test giữ riêng")
+    parser.add_argument("--extra-data", help="Thư mục ảnh gắn nhãn bổ sung, ví dụ test_images; chỉ thêm vào train")
     parser.add_argument("--epochs", type=int, default=40)
     source = parser.add_mutually_exclusive_group(required=False)
     source.add_argument("--image", help="Ảnh đơn cần phân loại")
@@ -404,6 +525,9 @@ def main():
     parser.add_argument("--model", default="model_outline.tflite", help="Đường dẫn model CNN ảnh .tflite")
     parser.add_argument("--landmark-classifier", default="model_landmark.keras",
                         help="Model classifier landmark do --train tạo")
+    parser.add_argument("--continue-model", help="Tiếp tục fine-tune từ model landmark .keras đã train")
+    parser.add_argument("--hard-weight", type=float, default=10.0,
+                        help="Trọng số ảnh bổ sung khó trong train (mặc định 10)")
     parser.add_argument("--landmark-model", default="models/hand_landmarker.task",
                         help="Model MediaPipe phát hiện khớp (tự tải nếu chưa có)")
     parser.add_argument("--threshold", type=float, default=0.55,
@@ -413,7 +537,9 @@ def main():
 
     if args.train:
         try:
-            train_landmark_model(args.data, args.landmark_classifier, args.landmark_model, args.epochs)
+            train_landmark_model(args.data, args.landmark_classifier, args.landmark_model,
+                                 args.epochs, extra_zip=args.extra_zip, extra_data=args.extra_data,
+                                 initial_model=args.continue_model, hard_weight=args.hard_weight)
             return 0
         except (OSError, ValueError, RuntimeError) as exc:
             print("Lỗi train landmark:", exc, file=sys.stderr)

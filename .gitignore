@@ -2,10 +2,9 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
-model_data.h
-model_data.tflite
-model_augmented*.h
-model_augmented*.tflite
 dataset_augmented/
 dataset_augmented_*/
+dataset_train_complete/
+dataset_train_all.zip
 models/*.task
+reports/competition_plan_extract.txt

@@ -1,0 +1,66 @@
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+test_images\fist\8a2808416da241b99eb7006185b41b8a_000.png: palm / xòe bàn tay (67.6%) | nhãn đúng: fist | SAI
+  fist=20.7% | palm=67.6% | peace=11.7% | thumbs_up=0.0% | none=0.0%
+test_images\fist\8a2808416da241b99eb7006185b41b8a_001.png: palm / xòe bàn tay (62.9%) | nhãn đúng: fist | SAI
+  fist=26.2% | palm=62.9% | peace=10.9% | thumbs_up=0.0% | none=0.0%
+test_images\fist\8a2808416da241b99eb7006185b41b8a_002.png: palm / xòe bàn tay (55.5%) | nhãn đúng: fist | SAI
+  fist=30.9% | palm=55.5% | peace=12.9% | thumbs_up=0.8% | none=0.0%
+test_images\fist\8a2808416da241b99eb7006185b41b8a_003.png: fist / nắm đấm (98.0%) | nhãn đúng: fist | ĐÚNG
+  fist=98.0% | palm=0.8% | peace=0.8% | thumbs_up=0.4% | none=0.0%
+test_images\fist\8a2808416da241b99eb7006185b41b8a_004.png: fist / nắm đấm (99.6%) | nhãn đúng: fist | ĐÚNG
+  fist=99.6% | palm=0.0% | peace=0.4% | thumbs_up=0.0% | none=0.0%
+test_images\none\d77844fa91544658af69864e408789d2_000.png: fist / nắm đấm (66.4%) | nhãn đúng: none | SAI
+  fist=66.4% | palm=20.7% | peace=11.3% | thumbs_up=1.6% | none=0.0%
+test_images\none\d77844fa91544658af69864e408789d2_001.png: fist / nắm đấm (64.1%) | nhãn đúng: none | SAI
+  fist=64.1% | palm=26.6% | peace=8.2% | thumbs_up=1.6% | none=0.0%
+test_images\none\d77844fa91544658af69864e408789d2_002.png: fist / nắm đấm (68.4%) | nhãn đúng: none | SAI
+  fist=68.4% | palm=21.1% | peace=8.6% | thumbs_up=1.6% | none=0.0%
+test_images\none\d77844fa91544658af69864e408789d2_003.png: fist / nắm đấm (68.4%) | nhãn đúng: none | SAI
+  fist=68.4% | palm=21.1% | peace=8.6% | thumbs_up=1.6% | none=0.0%
+test_images\none\d77844fa91544658af69864e408789d2_004.png: fist / nắm đấm (56.6%) | nhãn đúng: none | SAI
+  fist=56.6% | palm=31.2% | peace=9.8% | thumbs_up=2.3% | none=0.0%
+test_images\palm\dfda20bd70a8456f9a87f630ad8d5ba3_000.png: palm / xòe bàn tay (62.9%) | nhãn đúng: palm | ĐÚNG
+  fist=10.9% | palm=62.9% | peace=26.2% | thumbs_up=0.4% | none=0.0%
+test_images\palm\dfda20bd70a8456f9a87f630ad8d5ba3_001.png: fist / nắm đấm (50.4%) | nhãn đúng: palm | SAI
+  fist=50.4% | palm=37.5% | peace=11.7% | thumbs_up=0.4% | none=0.0%
+test_images\palm\dfda20bd70a8456f9a87f630ad8d5ba3_002.png: palm / xòe bàn tay (64.5%) | nhãn đúng: palm | ĐÚNG
+  fist=14.8% | palm=64.5% | peace=19.9% | thumbs_up=0.4% | none=0.0%
+test_images\palm\dfda20bd70a8456f9a87f630ad8d5ba3_003.png: fist / nắm đấm (73.8%) | nhãn đúng: palm | SAI
+  fist=73.8% | palm=22.7% | peace=1.6% | thumbs_up=1.6% | none=0.0%
+test_images\palm\dfda20bd70a8456f9a87f630ad8d5ba3_004.png: fist / nắm đấm (59.8%) | nhãn đúng: palm | SAI
+  fist=59.8% | palm=13.7% | peace=24.6% | thumbs_up=1.6% | none=0.0%
+test_images\peace\96bb15aec1ec4c0eb0d06d366d30d291_000.png: palm / xòe bàn tay (50.4%) | nhãn đúng: peace | SAI
+  fist=37.5% | palm=50.4% | peace=11.7% | thumbs_up=0.4% | none=0.0%
+test_images\peace\96bb15aec1ec4c0eb0d06d366d30d291_001.png: fist / nắm đấm (48.8%) | nhãn đúng: peace | SAI
+  fist=48.8% | palm=36.3% | peace=6.2% | thumbs_up=8.2% | none=0.4%
+test_images\peace\96bb15aec1ec4c0eb0d06d366d30d291_002.png: peace / hai ngón / peace (60.2%) | nhãn đúng: peace | ĐÚNG
+  fist=18.4% | palm=13.7% | peace=60.2% | thumbs_up=7.8% | none=0.0%
+test_images\peace\96bb15aec1ec4c0eb0d06d366d30d291_003.png: peace / hai ngón / peace (52.3%) | nhãn đúng: peace | ĐÚNG
+  fist=16.0% | palm=29.3% | peace=52.3% | thumbs_up=2.0% | none=0.0%
+test_images\peace\96bb15aec1ec4c0eb0d06d366d30d291_004.png: fist / nắm đấm (53.9%) | nhãn đúng: peace | SAI
+  fist=53.9% | palm=16.8% | peace=22.3% | thumbs_up=7.0% | none=0.0%
+test_images\thumbs_up\438d29a2af694b70a349b9410a6d7ba6_000.png: fist / nắm đấm (54.7%) | nhãn đúng: thumbs_up | SAI
+  fist=54.7% | palm=9.4% | peace=30.5% | thumbs_up=5.1% | none=0.0%
+test_images\thumbs_up\438d29a2af694b70a349b9410a6d7ba6_001.png: peace / hai ngón / peace (59.4%) | nhãn đúng: thumbs_up | SAI
+  fist=7.4% | palm=32.8% | peace=59.4% | thumbs_up=0.0% | none=0.0%
+test_images\thumbs_up\438d29a2af694b70a349b9410a6d7ba6_002.png: fist / nắm đấm (80.5%) | nhãn đúng: thumbs_up | SAI
+  fist=80.5% | palm=7.8% | peace=10.2% | thumbs_up=2.0% | none=0.0%
+test_images\thumbs_up\438d29a2af694b70a349b9410a6d7ba6_003.png: peace / hai ngón / peace (80.9%) | nhãn đúng: thumbs_up | SAI
+  fist=7.8% | palm=5.9% | peace=80.9% | thumbs_up=5.9% | none=0.0%
+test_images\thumbs_up\438d29a2af694b70a349b9410a6d7ba6_004.png: peace / hai ngón / peace (49.2%) | nhãn đúng: thumbs_up | SAI
+  fist=11.3% | palm=27.3% | peace=49.2% | thumbs_up=11.3% | none=0.8%
+
+Accuracy: 6/25 = 24.0%
+fist: 2/5
+palm: 2/5
+peace: 2/5
+thumbs_up: 0/5
+none: 0/5
+
+Ma trận nhầm lẫn (hàng=nhãn đúng, cột=dự đoán):
+expected\pred | fist | palm | peace | thumbs_up | none
+fist | 2 | 3 | 0 | 0 | 0
+palm | 3 | 2 | 0 | 0 | 0
+peace | 2 | 1 | 2 | 0 | 0
+thumbs_up | 2 | 0 | 3 | 0 | 0
+none | 5 | 0 | 0 | 0 | 0

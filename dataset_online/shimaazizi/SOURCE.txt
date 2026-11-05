@@ -1,0 +1,3 @@
+Source repository: https://github.com/shimaazizi/HandGesture-Recognizer
+Images from repository dataset/ folder; labels mapped by filename prefix: Fist->fist, OpenPalm->palm, PeaceSign->peace, ThumbsUp->thumbs_up.
+Repository declares MIT License. Retrieved for local gesture-classifier training.

@@ -5,7 +5,7 @@
   - Mở http://192.168.4.1 để xem cam; in địa chỉ lên Serial Monitor (115200)
   - Trang web: video + kết quả nhận dạng + xác suất từng lớp
   - /status trả JSON;  stream MJPEG ở cổng 81 (/stream) -> dùng được với collect_data.py
-  - Nếu CHƯA có model_outline.h/model_data.h -> chỉ stream camera để tìm IP và thu dataset
+  - Ưu tiên model_raw_focus4.h; nếu thiếu thì dùng model_outline.h/model_data.h
 
   Arduino IDE:
     Board: ESP32S3 Dev Module  (package "esp32" by Espressif)
@@ -20,8 +20,17 @@
 #include "esp_http_server.h"
 #include "esp_heap_caps.h"
 #include <stdlib.h>
+#include <string.h>
 
-#if __has_include("model_outline.h")
+#if __has_include("model_raw_focus4.h")
+  #define HAS_MODEL 1
+  #define MODEL_USE_OUTLINE 0
+  #include <Chirale_TensorFlowLite.h>
+  #include "tensorflow/lite/micro/micro_interpreter.h"
+  #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
+  #include "tensorflow/lite/schema/schema_generated.h"
+  #include "model_raw_focus4.h"
+#elif __has_include("model_outline.h")
   #define HAS_MODEL 1
   #define MODEL_USE_OUTLINE 1
   #include <Chirale_TensorFlowLite.h>
@@ -46,14 +55,16 @@
 const char* AP_SSID   = "ESP32-GESTURE";
 const char* AP_PASS   = "12345678";
 
-// Mapping tham khảo theo IoTLabs Bài 10. Một bài khác trong cùng series đưa
-// mapping CAM phổ biến khác; xem README và xác nhận revision trước khi kết luận.
-#define CAMERA_MODEL_IOTLABS_S3_CAM
+#define CAMERA_MODEL_ESP32S3_GESTURE
 
-const float CONF_THRESHOLD = 0.70f;   // dưới ngưỡng này -> coi là "không nhận dạng"
+const float CONF_THRESHOLD = 0.55f;   // ngưỡng cho model grayscale mới
+constexpr int LED1_GPIO = 1;          // GPIO1 -> LED1 (qua điện trở)
+constexpr int LED2_GPIO = 2;          // GPIO2 -> LED2 (qua điện trở)
+constexpr uint8_t GESTURE_STABLE_FRAMES = 4;
+const float ACTION_CONF_THRESHOLD = 0.85f;  // chặn lệnh khi dự đoán yếu
 // ============================================
 
-#if defined(CAMERA_MODEL_IOTLABS_S3_CAM)
+#if defined(CAMERA_MODEL_ESP32S3_GESTURE)
   #define PWDN_GPIO_NUM -1
   #define RESET_GPIO_NUM -1
   #define XCLK_GPIO_NUM 15
@@ -86,15 +97,71 @@ static float gProbs[MAX_CLASSES] = {0};
 static int gBest = -1;
 static float gConf = 0;
 static uint32_t gInferMs = 0;
+static bool gLed1On = false;
+static bool gLed2On = false;
 
 // ---------- TFLite Micro ----------
 #if HAS_MODEL
-constexpr int kArenaSize = 1024 * 1024;     // model outline lớn hơn; cấp phát trong PSRAM
+constexpr int kArenaSize = 1024 * 1024;     // cấp phát tensor arena trong PSRAM
 static uint8_t* gArena = nullptr;
 static const tflite::Model* gModel = nullptr;
 static tflite::MicroInterpreter* gInterp = nullptr;
 static TfLiteTensor* gIn = nullptr;
 static TfLiteTensor* gOut = nullptr;
+
+// Emit one command after a stable gesture. NONE/unknown for several frames
+// rearms that gesture so holding a pose cannot repeatedly change an LED.
+static int gActionCandidate = -1;
+static uint8_t gActionCount = 0;
+static uint8_t gReleaseCount = 0;
+static int gLastActionLabel = -1;
+
+static void updateGestureOutputs(int label, float confidence) {
+  if (label < 0 || label >= kNumClasses || confidence < ACTION_CONF_THRESHOLD ||
+      strcmp(kLabels[label], "none") == 0) {
+    gActionCandidate = -1;
+    gActionCount = 0;
+    if (gReleaseCount < GESTURE_STABLE_FRAMES) gReleaseCount++;
+    if (gReleaseCount >= GESTURE_STABLE_FRAMES) gLastActionLabel = -1;
+    return;
+  }
+  gReleaseCount = 0;
+  if (label != gActionCandidate) {
+    gActionCandidate = label;
+    gActionCount = 1;
+  } else if (gActionCount < GESTURE_STABLE_FRAMES) {
+    gActionCount++;
+  }
+  if (gActionCount < GESTURE_STABLE_FRAMES || label == gLastActionLabel) return;
+
+  const char* name = kLabels[label];
+  bool nextLed1;
+  bool nextLed2;
+  xSemaphoreTake(gMutex, portMAX_DELAY);
+  nextLed1 = gLed1On;
+  nextLed2 = gLed2On;
+  xSemaphoreGive(gMutex);
+  if (strcmp(name, "fist") == 0) {
+    nextLed1 = false;
+  } else if (strcmp(name, "palm") == 0) {
+    nextLed1 = true;
+  } else if (strcmp(name, "peace") == 0) {
+    nextLed2 = true;
+  } else if (strcmp(name, "thumbs_up") == 0) {
+    nextLed2 = false;
+  } else {
+    return;
+  }
+  digitalWrite(LED1_GPIO, nextLed1 ? HIGH : LOW);
+  digitalWrite(LED2_GPIO, nextLed2 ? HIGH : LOW);
+  xSemaphoreTake(gMutex, portMAX_DELAY);
+  gLed1On = nextLed1;
+  gLed2On = nextLed2;
+  xSemaphoreGive(gMutex);
+  gLastActionLabel = label;
+  Serial.printf("Command %-10s -> LED1=%s LED2=%s\n", name,
+                nextLed1 ? "ON" : "OFF", nextLed2 ? "ON" : "OFF");
+}
 
 bool initModel() {
   gModel = tflite::GetModel(g_model);
@@ -132,7 +199,7 @@ bool initModel() {
   return true;
 }
 
-// Cắt vuông, thu nhỏ grayscale về 96x96, nhấn outline bằng Sobel rồi lượng tử hóa.
+// Cắt vuông, thu nhỏ grayscale về 96x96; chỉ áp dụng Sobel nếu đang dùng model outline.
 // Không lật ảnh ở đây; model được train với cả ảnh gốc và ảnh lật ngang.
 static void preprocess(const camera_fb_t* fb, int8_t* dst) {
   const int w = fb->width, h = fb->height;
@@ -215,6 +282,8 @@ static void runInference(const camera_fb_t* fb) {
   gConf = smooth[best];
   gInferMs = dt;
   xSemaphoreGive(gMutex);
+
+  updateGestureOutputs(label, smooth[best]);
 
   if (label != lastBest) {
     lastBest = label;
@@ -311,6 +380,7 @@ body{font-family:sans-serif;background:#111;color:#eee;text-align:center;margin:
 </style></head><body>
 <div class="w"><img id="v"><div class="sq"></div></div>
 <div id="lb">...</div><div id="sub"></div><div id="bars"></div>
+<div id="leds" style="font-weight:bold;margin:10px">LED1: OFF | LED2: OFF</div>
 <p style="color:#777;font-size:.85em">Đặt bàn tay trong khung xanh (vùng AI nhìn thấy)</p>
 <script>
 document.getElementById('v').src='http://'+location.hostname+':81/stream';
@@ -320,6 +390,7 @@ async function t(){
     document.getElementById('lb').textContent=j.label;
     document.getElementById('sub').textContent=
       j.classes.length?('độ tin cậy '+(j.conf*100).toFixed(0)+'% | '+j.ms+' ms/khung'):'Chưa có model - chỉ stream cam';
+    document.getElementById('leds').textContent='LED1: '+(j.led1?'ON':'OFF')+' | LED2: '+(j.led2?'ON':'OFF');
     let h='';
     j.classes.forEach((c,i)=>{h+='<div class="r"><span>'+c+'</span><div><i style="width:'+(j.probs[i]*100).toFixed(0)+'%"></i></div></div>';});
     document.getElementById('bars').innerHTML=h;
@@ -347,9 +418,11 @@ static esp_err_t statusHandler(httpd_req_t* req) {
   j += "],\"probs\":[";
   for (int i = 0; i < kNumClasses; i++) { if (i) j += ","; j += String(gProbs[i], 2); }
   j += "]";
+  j += ",\"led1\":"; j += gLed1On ? "true" : "false";
+  j += ",\"led2\":"; j += gLed2On ? "true" : "false";
   xSemaphoreGive(gMutex);
 #else
-  j += "\"label\":\"(no model)\",\"conf\":0,\"ms\":0,\"classes\":[],\"probs\":[]";
+  j += "\"label\":\"(no model)\",\"conf\":0,\"ms\":0,\"classes\":[],\"probs\":[],\"led1\":false,\"led2\":false";
 #endif
   j += "}";
   httpd_resp_set_type(req, "application/json");
@@ -435,6 +508,8 @@ void printAddress() {
   Serial.printf("AP: %s / %s\n", AP_SSID, AP_PASS);
   Serial.println("Mở:  http://192.168.4.1");
   Serial.println("Stream: http://192.168.4.1:81/stream");
+  Serial.printf("LED1 GPIO%d (fist OFF / palm ON), LED2 GPIO%d (peace ON / like OFF)\n",
+                LED1_GPIO, LED2_GPIO);
   Serial.println("=====================================");
 }
 
@@ -443,6 +518,12 @@ void setup() {
   Serial.begin(115200);
   delay(1500);
   Serial.println("\nESP32-S3 Gesture Recognition");
+
+  pinMode(LED1_GPIO, OUTPUT);
+  pinMode(LED2_GPIO, OUTPUT);
+  digitalWrite(LED1_GPIO, LOW);
+  digitalWrite(LED2_GPIO, LOW);
+  Serial.println("Control: fist=LED1 OFF, palm=LED1 ON, peace=LED2 ON, thumbs_up=LED2 OFF");
 
   if (!psramFound()) Serial.println("CẢNH BÁO: không thấy PSRAM - kiểm tra Tools > PSRAM!");
 
@@ -458,7 +539,7 @@ void setup() {
 #if HAS_MODEL
   if (!initModel()) { Serial.println("Dừng: model lỗi"); while (true) delay(1000); }
 #else
-  Serial.println("Chưa có model_outline.h/model_data.h -> chế độ chỉ stream cam");
+  Serial.println("Chưa có model_raw_focus4.h/model_outline.h/model_data.h -> chế độ chỉ stream cam");
 #endif
 
   startWiFi();

@@ -22,7 +22,11 @@ SIZE = 96
 def source_group_id(path):
     stem = path.stem
     if stem.startswith("aug__"):
-        stem = stem[5:].rsplit("__", 1)[0]
+        parts = stem[5:].split("__")
+        if len(parts) >= 3 and parts[-2] in ("v1", "v2"):
+            stem = "__".join(parts[:-2])
+        elif len(parts) >= 2:
+            stem = "__".join(parts[:-1])
     # Collector filenames contain label_YYYYMMDD_HHMMSS_microseconds. Group
     # nearby burst frames into 5-second capture windows to reduce validation leakage.
     parts = stem.split("_")
@@ -36,7 +40,7 @@ def source_group_id(path):
     return stem
 
 
-def load_dataset(root, val_fraction, seed):
+def load_dataset(root, val_fraction, seed, use_outline=True):
     rng = random.Random(seed)
     xs, ys, group_ids = [], [], []
     for index, label in enumerate(LABELS):
@@ -61,8 +65,10 @@ def load_dataset(root, val_fraction, seed):
                 left, top = (w - side) // 2, (h - side) // 2
                 resampling = getattr(Image, "Resampling", Image)
                 image = image.crop((left, top, left + side, top + side)).resize((SIZE, SIZE), resampling.BOX)
-                outlined = apply_outline(np.asarray(image, dtype=np.uint8))
-                xs.append(outlined.astype(np.float32)[..., None] / 255.0)
+                pixels = np.asarray(image, dtype=np.uint8)
+                if use_outline:
+                    pixels = apply_outline(pixels)
+                xs.append(pixels.astype(np.float32)[..., None] / 255.0)
                 ys.append(index)
                 group_ids.append((index, source_group_id(path)))
     x = np.asarray(xs, dtype=np.float32)
@@ -120,11 +126,17 @@ def main():
     parser.add_argument("--epochs", type=int, default=25)
     parser.add_argument("--val", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--no-outline", action="store_true",
+                        help="Dùng ảnh grayscale gốc; không áp dụng outline/Sobel")
+    parser.add_argument("--class-multiplier", action="append", default=[], metavar="LABEL=VALUE",
+                        help="Nhân trọng số lớp sau khi cân bằng, ví dụ thumbs_up=1.5; có thể lặp lại")
     args = parser.parse_args()
     if not 0.05 <= args.val <= 0.4:
         parser.error("--val nên nằm trong khoảng 0.05 đến 0.4")
     tf.random.set_seed(args.seed)
-    x_train, y_train, x_val, y_val = load_dataset(Path(args.data), args.val, args.seed)
+    x_train, y_train, x_val, y_val = load_dataset(
+        Path(args.data), args.val, args.seed, use_outline=not args.no_outline
+    )
     # Give the model both natural hand orientations; do not mirror camera output at inference.
     x_train = np.concatenate((x_train, np.flip(x_train, axis=2)), axis=0)
     y_train = np.concatenate((y_train, y_train), axis=0)
@@ -134,6 +146,20 @@ def main():
         i: len(y_train) / (len(LABELS) * max(1, int(count)))
         for i, count in enumerate(class_counts)
     }
+    multipliers = {}
+    for item in args.class_multiplier:
+        label, separator, value = item.partition("=")
+        if not separator or label not in LABELS:
+            parser.error("--class-multiplier cần LABEL=VALUE với LABEL thuộc {}".format(LABELS))
+        try:
+            multiplier = float(value)
+        except ValueError:
+            parser.error("Trọng số không phải số: {}".format(item))
+        if not np.isfinite(multiplier) or multiplier <= 0:
+            parser.error("Trọng số phải dương và hữu hạn: {}".format(item))
+        multipliers[label] = multiplier
+    for index, label in enumerate(LABELS):
+        class_weight[index] *= multipliers.get(label, 1.0)
     callbacks = [
         tf.keras.callbacks.EarlyStopping(monitor="val_accuracy", patience=8,
                                           restore_best_weights=True),
@@ -144,6 +170,12 @@ def main():
               batch_size=32, callbacks=callbacks, class_weight=class_weight, verbose=2)
     loss, accuracy = model.evaluate(x_val, y_val, verbose=0)
     print(f"Validation: accuracy={accuracy:.3f}, loss={loss:.3f} (chỉ tham khảo; cần test ảnh mới)")
+    validation_scores = model.predict(x_val, batch_size=32, verbose=0)
+    validation_predicted = np.argmax(validation_scores, axis=1)
+    for index, label in enumerate(LABELS):
+        mask = y_val == index
+        recall = float(np.mean(validation_predicted[mask] == index)) if np.any(mask) else 0.0
+        print(f"Validation recall {label}: {int(np.sum(validation_predicted[mask] == index))}/{int(np.sum(mask))} = {recall:.1%}")
 
     # Representative data và int8 I/O để chạy bằng TensorFlow Lite Micro.
     converter = tf.lite.TFLiteConverter.from_keras_model(model)
@@ -168,6 +200,7 @@ def main():
     tflite_path.write_bytes(model_bytes)
     write_header(model_bytes, Path(args.out))
     print(f"Đã xuất {args.out} ({len(model_bytes)} bytes) và {tflite_path}")
+    print(f"Tiền xử lý: {'grayscale không outline' if args.no_outline else 'grayscale + outline'}")
     print(f"Copy {args.out} cạnh .ino, compile/upload bằng Arduino IDE.")
 
 

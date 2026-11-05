@@ -1,2 +1,0 @@
-# Works with Python 3.8 on Windows.
-mediapipe==0.10.11

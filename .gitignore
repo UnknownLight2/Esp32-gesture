@@ -8,3 +8,4 @@ dataset_train_complete/
 dataset_train_all.zip
 models/*.task
 reports/competition_plan_extract.txt
+~$*

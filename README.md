@@ -37,6 +37,8 @@ Firmware ưu tiên `model_raw_focus4.h`; camera và model chạy trên ESP32-S3,
 
 Firmware có thể dùng cử chỉ để điều khiển hai LED ngoài; ánh xạ và chân nối nằm ở mục kiểm tra trên ESP32. Độ tin cậy phụ thuộc dữ liệu và camera.
 
+Bản báo cáo demo và poster trình bày nhóm được lưu trong `reports/`; có thể mở trực tiếp sau khi tải repository.
+
 ## 1. Trước hết: camera và IP
 
 1. Mở `esp32s3_gesture.ino` trong Arduino IDE, chọn **ESP32S3 Dev Module**, bật PSRAM theo hướng dẫn board (N16R8 thường là OPI PSRAM), USB CDC On Boot bật nếu dùng cổng USB native, và chọn partition phù hợp.
